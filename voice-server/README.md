@@ -4,10 +4,11 @@ This is a **persistent WebSocket server** that handles Twilio's [ConversationRel
 
 ## What it does
 
-- Runs a WebSocket server on port 8080 (internal; exposed via Fly.io)
-- Accepts incoming ConversationRelay connections from Twilio's Voice API
-- Routes voice interactions through OpenAI's Realtime API for live conversation
+- Runs a WebSocket server on port 8080 (internal; exposed via Fly.io; override with `PORT`)
+- Validates the Twilio signature on the WebSocket handshake, then accepts incoming ConversationRelay connections from Twilio's Voice API
+- Twilio performs speech-to-text and text-to-speech; this server just runs a short scripted conversation (asks the caller's name, then their comic idea) by exchanging text messages
 - Publishes comic generation jobs to the same **QStash worker** as the SMS channel, so comics are delivered via text message
+- Does **not** call OpenAI or need OpenAI credentials — image generation happens later in the shared QStash worker, not here
 
 ## Local development
 
@@ -71,6 +72,7 @@ This is a **persistent WebSocket server** that handles Twilio's [ConversationRel
 
 ## Notes
 
-- The voice server and the Next.js app both use the **same Twilio account**, **same QStash worker**, and **same OpenAI credentials**.
+- The voice server and the Next.js app both use the **same Twilio account** and the **same QStash worker**. The voice server does not use OpenAI directly (image generation runs in the shared QStash worker).
 - Comics generated via voice are delivered via the SMS/MMS channel (same number, so you get the comic texted to you).
 - WebSocket connections are long-lived; the server must stay running throughout a call.
+- **URL must match exactly:** `CONVERSATION_RELAY_WS_URL` (set here AND in the Next.js app), the `url="..."` in the `/api/twilio/voice` TwiML, and the value Twilio dials must all be byte-identical — the WebSocket handshake signature is validated against this URL, so any trailing-slash/scheme/host difference rejects every call with a 403.

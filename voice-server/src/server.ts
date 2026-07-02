@@ -37,6 +37,9 @@ const server = createServer();
 const wss = new WebSocketServer({ noServer: true });
 
 server.on("upgrade", (req, socket, head) => {
+  // Guard the raw TCP socket during the handshake: a client aborting
+  // mid-upgrade (ECONNRESET) would otherwise emit an unhandled 'error'.
+  socket.on("error", () => {});
   const sig = req.headers["x-twilio-signature"] as string | undefined;
   const ok = !!sig && twilioSdk.validateRequest(process.env.TWILIO_AUTH_TOKEN!, sig, PUBLIC_WSS, {});
   if (!ok) {

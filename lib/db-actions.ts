@@ -1,5 +1,5 @@
 import { db } from './db';
-import { stories, pages, feedback, type Story, type Page, type Feedback } from './schema';
+import { stories, pages, feedback, conversations, type Story, type Page, type Feedback, type Conversation } from './schema';
 import { and, eq, gte, isNotNull, sql } from 'drizzle-orm';
 import { generateComicSlug } from './slug-generator';
 
@@ -163,4 +163,31 @@ export async function getPagesGeneratedLast24Hours(): Promise<number> {
     .from(pages)
     .where(and(isNotNull(pages.generatedImageUrl), gte(pages.createdAt, since)));
   return row?.count ?? 0;
+}
+
+export async function getOrCreateConversation(phoneNumber: string, channel: string = "sms"): Promise<Conversation> {
+  const existing = await db.select().from(conversations).where(eq(conversations.phoneNumber, phoneNumber)).limit(1);
+  if (existing.length > 0) return existing[0];
+  const [created] = await db
+    .insert(conversations)
+    .values({ phoneNumber, channel, state: "awaiting_name", collected: {} })
+    .returning();
+  return created;
+}
+
+export async function updateConversation(
+  phoneNumber: string,
+  data: { state?: string; collected?: Record<string, unknown>; activeStoryId?: string | null },
+): Promise<void> {
+  await db
+    .update(conversations)
+    .set({ ...data, updatedAt: new Date() })
+    .where(eq(conversations.phoneNumber, phoneNumber));
+}
+
+export async function resetConversation(phoneNumber: string): Promise<void> {
+  await db
+    .update(conversations)
+    .set({ state: "awaiting_name", collected: {}, activeStoryId: null, updatedAt: new Date() })
+    .where(eq(conversations.phoneNumber, phoneNumber));
 }

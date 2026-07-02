@@ -21,6 +21,7 @@ import {
   isContentPolicyViolation,
   getContentPolicyErrorMessage,
 } from "@/lib/utils";
+import { createComicStory, ComicServiceError } from "@/lib/comic-service";
 
 const TEXT_MODEL = "Qwen/Qwen3.5-9B";
 
@@ -50,6 +51,54 @@ export async function POST(request: NextRequest) {
         { error: "Missing required fields" },
         { status: 400 },
       );
+    }
+
+    // New-story path: delegate to channel-agnostic service and return early.
+    // The continuation path (storyId present) falls through to the existing logic below.
+    if (!storyId) {
+      try {
+        const result = await createComicStory({
+          userId,
+          prompt,
+          style,
+          characterImageUrls: characterImages,
+          source: "web",
+          generateTitle: true,
+        });
+        return NextResponse.json({
+          imageUrl: result.imageUrl,
+          storyId: result.story.id,
+          storySlug: result.story.slug,
+          pageId: result.page.id,
+          pageNumber: result.page.pageNumber,
+          title: result.story.title,
+          description: result.story.description,
+        });
+      } catch (error) {
+        if (error instanceof ComicServiceError) {
+          if (error.type === "content_policy") {
+            return NextResponse.json(
+              { error: getContentPolicyErrorMessage(), errorType: "content_policy" },
+              { status: 400 },
+            );
+          }
+          if (error.type === "credit_limit") {
+            return NextResponse.json(
+              {
+                error:
+                  "Insufficient API credits. Please add credits to your OpenAI account at https://platform.openai.com/account/billing or update your API key.",
+                errorType: "credit_limit",
+              },
+              { status: 402 },
+            );
+          }
+          return NextResponse.json(
+            { error: error.message || "Failed to generate image", errorType: "api_error" },
+            { status: error.status || 500 },
+          );
+        }
+        throw error;
+      }
     }
 
     // Determine which API key to use

@@ -22,6 +22,52 @@ The AI references previous pages for visual coherence and uses uploaded characte
 - [AWS S3](https://aws.amazon.com/s3/) for image storage
 - [Upstash Redis](https://upstash.com/) for rate limiting
 - [jsPDF](https://github.com/parallax/jsPDF) for PDF generation
+- [Twilio](https://www.twilio.com/) for SMS/MMS delivery
+- [Upstash QStash](https://upstash.com/docs/qstash/overview) for async background jobs
+
+## Create comics by text (SMS/MMS)
+
+Text the Twilio number your name, then a comic idea (optionally attach a photo) — you receive the finished comic as an MMS image plus a link to the web story page approximately 1 minute later.
+
+The SMS channel uses an **async, webhook-driven design**: the incoming SMS webhook acknowledges instantly (to beat Twilio's ~15 second timeout), while a QStash background job generates the comic (30–60 seconds) and delivers it via outbound MMS.
+
+### Setup checklist
+
+1. **Create a Twilio account** and retrieve your Account SID and Auth Token from the [Twilio Console](https://console.twilio.com).
+
+2. **Buy a Twilio phone number** with SMS, Voice, and MMS capabilities enabled.
+
+3. **A2P 10DLC registration (Brand + Campaign)** — **REQUIRED for US SMS deliverability**. This ~10–15 day carrier review process is mandatory before your number can send SMS at scale. Start early.
+   - Register your brand and campaign in the [Twilio Console](https://console.twilio.com).
+   - Estimated completion: 10–15 days pending carrier review.
+
+4. **Set the number's Messaging webhook** in the [Twilio Console](https://console.twilio.com):
+   - Webhook URL: `<PUBLIC_BASE_URL>/api/twilio/sms` (HTTP POST)
+   - Replace `<PUBLIC_BASE_URL>` with your public HTTPS domain (no trailing slash; e.g., `https://myapp.example.com` or `https://myapp.ngrok.io`).
+
+5. **Enable Upstash QStash** in the [Upstash Console](https://console.upstash.com):
+   - Create a QStash project and copy:
+     - `QSTASH_TOKEN`
+     - `QSTASH_CURRENT_SIGNING_KEY`
+     - `QSTASH_NEXT_SIGNING_KEY`
+
+6. **Set all env vars** in your `.env` file:
+   - From Twilio: `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, `TWILIO_PHONE_NUMBER`
+   - From QStash: `QSTASH_TOKEN`, `QSTASH_CURRENT_SIGNING_KEY`, `QSTASH_NEXT_SIGNING_KEY`
+   - Your public URL: `PUBLIC_BASE_URL`
+   - Plus existing vars: `OPENAI_API_KEY`, `TOGETHER_API_KEY`, S3 credentials, database URL, Clerk keys, etc.
+
+7. **Apply the database migration**:
+   ```bash
+   pnpm drizzle-kit push
+   ```
+   This introspects your live Neon database and applies the `conversations` table + `stories.source` column.
+   
+   **Important**: Use `drizzle-kit push`, not file-based `drizzle-kit migrate` — the migration folder has pre-existing orphaned history that only `push` handles correctly.
+
+8. **Deploy or tunnel**: You need a public HTTPS URL so Twilio and QStash can reach your app.
+   - **Production**: Deploy to Vercel, Railway, or your preferred host.
+   - **Local testing**: Use [ngrok](https://ngrok.com/) or similar: `ngrok http 3000`, then set `PUBLIC_BASE_URL=https://<your-ngrok-url>`.
 
 ## Cloning & running
 

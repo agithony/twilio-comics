@@ -8,13 +8,19 @@ export function cn(...inputs: ClassValue[]) {
 export const TOGETHER_LINK =
   "https://togetherai.link/?utm_source=make-comics&utm_medium=referral&utm_campaign=example-app";
 
+export const OPENAI_LINK = "https://platform.openai.com/api-keys";
+
 export function isContentPolicyViolation(errorMessage: string): boolean {
   return (
     errorMessage.includes("content policy") ||
     errorMessage.includes("Invalid content detected") ||
     errorMessage.includes("content moderation") ||
     errorMessage.includes("flagged and rejected") ||
-    errorMessage.includes("NO_IMAGE")
+    errorMessage.includes("NO_IMAGE") ||
+    // OpenAI moderation phrasing
+    errorMessage.includes("safety system") ||
+    errorMessage.includes("moderation_blocked") ||
+    errorMessage.toLowerCase().includes("content_policy_violation")
   );
 }
 

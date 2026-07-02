@@ -1,6 +1,5 @@
 import { type NextRequest, NextResponse } from "next/server";
 import { auth } from "@clerk/nextjs/server";
-import Together from "together-ai";
 import { db } from "@/lib/db";
 import { pages } from "@/lib/schema";
 import { eq } from "drizzle-orm";
@@ -13,22 +12,13 @@ import {
   deletePage,
 } from "@/lib/db-actions";
 import { freeTierRateLimit } from "@/lib/rate-limit";
-import { uploadImageToS3 } from "@/lib/s3-upload";
+import { uploadBufferToS3 } from "@/lib/s3-upload";
 import { buildComicPrompt } from "@/lib/prompt";
+import { generateComicImage } from "@/lib/image-generation";
 import {
   isContentPolicyViolation,
   getContentPolicyErrorMessage,
 } from "@/lib/utils";
-
-const NEW_MODEL = false;
-
-const IMAGE_MODEL = NEW_MODEL
-  ? "google/gemini-3-pro-image"
-  : "google/flash-image-2.5";
-
-const FIXED_DIMENSIONS = NEW_MODEL
-  ? { width: 896, height: 1200 }
-  : { width: 864, height: 1184 };
 
 export async function POST(request: NextRequest) {
   try {
@@ -98,8 +88,6 @@ export async function POST(request: NextRequest) {
       });
     }
 
-    const dimensions = FIXED_DIMENSIONS;
-
     // Collect reference images: previous page + story characters + current characters
     let referenceImages: string[] = [];
 
@@ -140,11 +128,7 @@ export async function POST(request: NextRequest) {
       previousPages,
     });
 
-    const client = new Together({
-      apiKey: process.env.TOGETHER_API_KEY,
-    });
-
-    let response;
+    let imageBuffer: Buffer;
     try {
       console.log("Starting image generation for ...");
       console.dir({
@@ -152,35 +136,25 @@ export async function POST(request: NextRequest) {
         referenceImages,
       });
       const startTime = Date.now();
-      response = await client.images.generate({
-        model: IMAGE_MODEL,
+      imageBuffer = await generateComicImage({
+        apiKey: process.env.OPENAI_API_KEY!,
         prompt: fullPrompt,
-        width: dimensions.width,
-        height: dimensions.height,
-        reference_images:
-          referenceImages.length > 0 ? referenceImages : undefined,
+        referenceImageUrls: referenceImages,
       });
       const endTime = Date.now();
       const durationMs = endTime - startTime;
       const durationSeconds = (durationMs / 1000).toFixed(2);
       console.log(`Image generation completed in ${durationSeconds} seconds`);
     } catch (error) {
-      console.error("Together AI API error:", error);
+      console.error("Image generation error:", error);
 
-      // Clean up DB records if generation failed due to content policy
+      // Clean up DB records if generation failed
       try {
-        if (
-          error instanceof Error &&
-          error.message &&
-          error.message.includes("NO_IMAGE")
-        ) {
-          if (isRedraw) {
-            // For redraw, we don't delete the page, just don't update it
-          } else {
-            // For new page, delete the page that was created
-            await deletePage(page.id);
-          }
+        if (!isRedraw) {
+          // For new page, delete the page that was created
+          await deletePage(page.id);
         }
+        // For redraw, we don't delete the page, just don't update it
       } catch (cleanupError) {
         console.error(
           "Error cleaning up DB on image generation failure:",
@@ -232,31 +206,20 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    if (!response.data || !response.data[0] || !response.data[0].url) {
-      return NextResponse.json(
-        { error: "No image URL in response" },
-        { status: 500 },
-      );
-    }
-
-    const imageUrl = response.data[0].url;
-    const s3Key = `${story.id}/page-${page.pageNumber}-${Date.now()}.jpg`;
-    const s3ImageUrl = await uploadImageToS3(imageUrl, s3Key);
+    const s3Key = `${story.id}/page-${page.pageNumber}-${Date.now()}.png`;
+    const s3ImageUrl = await uploadBufferToS3(imageBuffer, s3Key, "image/png");
 
     await updatePage(page.id, s3ImageUrl);
 
-    // Apply rate limiting for free tier after successful generation
-    const hasApiKey = request.headers.get("x-api-key");
-    if (!hasApiKey) {
-      try {
-        await freeTierRateLimit.limit(userId);
-      } catch (rateLimitError) {
-        console.error(
-          "Error applying rate limit after successful generation:",
-          rateLimitError,
-        );
-        // Don't fail the request if rate limiting fails, just log it
-      }
+    // Apply rate limiting after successful generation (always server-funded)
+    try {
+      await freeTierRateLimit.limit(userId);
+    } catch (rateLimitError) {
+      console.error(
+        "Error applying rate limit after successful generation:",
+        rateLimitError,
+      );
+      // Don't fail the request if rate limiting fails, just log it
     }
 
     return NextResponse.json({

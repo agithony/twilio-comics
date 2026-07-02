@@ -14,22 +14,14 @@ import {
 } from "@/lib/db-actions";
 import { freeTierRateLimit } from "@/lib/rate-limit";
 import { COMIC_STYLES } from "@/lib/constants";
-import { uploadImageToS3 } from "@/lib/s3-upload";
+import { uploadBufferToS3 } from "@/lib/s3-upload";
 import { buildComicPrompt } from "@/lib/prompt";
+import { generateComicImage } from "@/lib/image-generation";
 import {
   isContentPolicyViolation,
   getContentPolicyErrorMessage,
 } from "@/lib/utils";
-
-const NEW_MODEL = false;
-
-const IMAGE_MODEL = NEW_MODEL
-  ? "google/gemini-3-pro-image"
-  : "google/flash-image-2.5";
-
-const FIXED_DIMENSIONS = NEW_MODEL
-  ? { width: 896, height: 1200 }
-  : { width: 864, height: 1184 };
+import { createComicStory, ComicServiceError } from "@/lib/comic-service";
 
 const TEXT_MODEL = "Qwen/Qwen3.5-9B";
 
@@ -59,6 +51,55 @@ export async function POST(request: NextRequest) {
         { error: "Missing required fields" },
         { status: 400 },
       );
+    }
+
+    // New-story path: delegate to channel-agnostic service and return early.
+    // The continuation path (storyId present) falls through to the existing logic below.
+    if (!storyId) {
+      try {
+        const result = await createComicStory({
+          userId,
+          prompt,
+          style,
+          characterImageUrls: characterImages,
+          source: "web",
+          generateTitle: true,
+          usesOwnApiKey: !!apiKey,
+        });
+        return NextResponse.json({
+          imageUrl: result.imageUrl,
+          storyId: result.story.id,
+          storySlug: result.story.slug,
+          pageId: result.page.id,
+          pageNumber: result.page.pageNumber,
+          title: result.story.title,
+          description: result.story.description,
+        });
+      } catch (error) {
+        if (error instanceof ComicServiceError) {
+          if (error.type === "content_policy") {
+            return NextResponse.json(
+              { error: getContentPolicyErrorMessage(), errorType: "content_policy" },
+              { status: 400 },
+            );
+          }
+          if (error.type === "credit_limit") {
+            return NextResponse.json(
+              {
+                error:
+                  "Insufficient API credits. Please add credits to your OpenAI account at https://platform.openai.com/account/billing or update your API key.",
+                errorType: "credit_limit",
+              },
+              { status: 402 },
+            );
+          }
+          return NextResponse.json(
+            { error: error.message || "Failed to generate image", errorType: "api_error" },
+            { status: error.status || 500 },
+          );
+        }
+        throw error;
+      }
     }
 
     // Determine which API key to use
@@ -129,8 +170,6 @@ export async function POST(request: NextRequest) {
 
     // Use only the character images sent from the frontend
     referenceImages.push(...characterImages);
-
-    const dimensions = FIXED_DIMENSIONS;
 
     const fullPrompt = buildComicPrompt({
       prompt,
@@ -225,7 +264,7 @@ Only return the JSON, no other text.`;
       })();
     }
 
-    let response;
+    let imageBuffer: Buffer;
     try {
       console.log("Starting image generation for ...");
       console.dir({
@@ -233,21 +272,17 @@ Only return the JSON, no other text.`;
         referenceImages,
       });
       const startTime = Date.now();
-      response = await client.images.generate({
-        model: IMAGE_MODEL,
+      imageBuffer = await generateComicImage({
+        apiKey: process.env.OPENAI_API_KEY!,
         prompt: fullPrompt,
-        width: dimensions.width,
-        height: dimensions.height,
-        temperature: 0.1, // Lower temperature for more consistent face matching
-        reference_images:
-          referenceImages.length > 0 ? referenceImages : undefined,
+        referenceImageUrls: referenceImages,
       });
       const endTime = Date.now();
       const durationMs = endTime - startTime;
       const durationSeconds = (durationMs / 1000).toFixed(2);
       console.log(`Image generation completed in ${durationSeconds} seconds`);
     } catch (error) {
-      console.error("Together AI API error:", error);
+      console.error("Image generation error:", error);
 
       // Clean up DB records if generation failed
       try {
@@ -285,7 +320,7 @@ Only return the JSON, no other text.`;
           return NextResponse.json(
             {
               error:
-                "Insufficient API credits. Please add credits to your Together.ai account at https://api.together.ai/settings/billing or update your API key.",
+                "Insufficient API credits. Please add credits to your OpenAI account at https://platform.openai.com/account/billing or update your API key.",
               errorType: "credit_limit",
             },
             { status: 402 },
@@ -310,20 +345,11 @@ Only return the JSON, no other text.`;
       );
     }
 
-    if (!response.data || !response.data[0] || !response.data[0].url) {
-      return NextResponse.json(
-        { error: "No image URL in response" },
-        { status: 500 },
-      );
-    }
-
-    const imageUrl = response.data[0].url;
-
-    // Upload image to S3 for permanent storage
+    // Upload generated bytes to S3 for permanent storage
     const s3Key = `${storyId || story!.id}/page-${
       page.pageNumber
-    }-${Date.now()}.jpg`;
-    const s3ImageUrl = await uploadImageToS3(imageUrl, s3Key);
+    }-${Date.now()}.png`;
+    const s3ImageUrl = await uploadBufferToS3(imageBuffer, s3Key, "image/png");
 
     // Wait for title/description generation if it's a new story
     let generatedTitle: string | undefined;
@@ -362,17 +388,15 @@ Only return the JSON, no other text.`;
       );
     }
 
-    // Apply rate limiting for free tier after successful generation
-    if (isUsingFreeTier) {
-      try {
-        await freeTierRateLimit.limit(userId);
-      } catch (rateLimitError) {
-        console.error(
-          "Error applying rate limit after successful generation:",
-          rateLimitError,
-        );
-        // Don't fail the request if rate limiting fails, just log it
-      }
+    // Apply rate limiting after successful generation (always server-funded)
+    try {
+      await freeTierRateLimit.limit(userId);
+    } catch (rateLimitError) {
+      console.error(
+        "Error applying rate limit after successful generation:",
+        rateLimitError,
+      );
+      // Don't fail the request if rate limiting fails, just log it
     }
 
     const responseData = storyId

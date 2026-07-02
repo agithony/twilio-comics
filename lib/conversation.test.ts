@@ -46,4 +46,13 @@ describe("advanceConversation", () => {
     expect(r.action).toBe("reset");
     expect(r.collected).toEqual({});
   });
+
+  it("'new' keyword resets from awaiting_name", () => {
+    expect(advanceConversation({ state: "awaiting_name", collected: {} }, { body: "new", hasImage: false }).action).toBe("reset");
+  });
+
+  it("'reset' keyword resets from generating and returns awaiting_name nextState", () => {
+    const r = advanceConversation({ state: "generating", collected: { name: "Ada", prompt: "x" } }, { body: "reset", hasImage: false });
+    expect(r.nextState).toBe("awaiting_name");
+  });
 });

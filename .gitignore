@@ -31,3 +31,6 @@ next-env.d.ts
 IDEAS.md
 
 .claude/launch.json
+
+# nested package node_modules (e.g. voice-server)
+node_modules/

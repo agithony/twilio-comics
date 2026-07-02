@@ -12,9 +12,9 @@ export interface GenerationJob {
 
 export async function publishGenerationJob(job: GenerationJob): Promise<void> {
   const client = new Client({ token: process.env.QSTASH_TOKEN! });
-  const url = `${process.env.PUBLIC_BASE_URL}/api/twilio/generate-worker`;
+  const url = `${process.env.PUBLIC_BASE_URL?.replace(/\/$/, "")}/api/twilio/generate-worker`;
   const hash = createHash("sha256")
-    .update(`${job.phoneNumber}:${job.prompt}`)
+    .update(`${job.phoneNumber}:${job.prompt}:${job.style ?? ""}:${(job.characterImageUrls ?? []).join(",")}`)
     .digest("hex")
     .slice(0, 16);
   await client.publishJSON({

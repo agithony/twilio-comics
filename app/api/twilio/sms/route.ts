@@ -34,7 +34,7 @@ export async function POST(request: NextRequest) {
   });
 
   // Signature validation MUST happen before any DB work
-  const url = `${process.env.PUBLIC_BASE_URL}/api/twilio/sms`;
+  const url = `${process.env.PUBLIC_BASE_URL?.replace(/\/$/, "")}/api/twilio/sms`;
   const signature = request.headers.get("x-twilio-signature");
   if (!validateTwilioSignature({ signature, url, params })) {
     return new Response("Invalid signature", { status: 403 });

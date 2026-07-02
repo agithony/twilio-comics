@@ -28,7 +28,7 @@ async function handler(request: Request) {
       generateTitle: true,
     });
 
-    const link = `${process.env.PUBLIC_BASE_URL}/story/${result.story.slug}`;
+    const link = `${process.env.PUBLIC_BASE_URL?.replace(/\/$/, "")}/story/${result.story.slug}`;
     await sendComicMms({
       to: job.phoneNumber,
       body: `Your comic "${result.story.title}" is ready! View it and add more pages: ${link}`,
